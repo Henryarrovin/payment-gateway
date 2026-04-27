@@ -11,6 +11,7 @@ var ProviderSet = wire.NewSet(
 	NewProviderRepository,
 	NewOrderRepository,
 	NewPaymentRepository,
+	NewWebhookRepository,
 	NewCleanup,
 )
 
