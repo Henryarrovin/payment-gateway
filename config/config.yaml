@@ -7,7 +7,7 @@ database:
   port: 5432
   user: postgres
   password: postgres
-  dbname: payment_db
+  dbname: s3demo
   sslmode: disable
  
 auth_grpc:
