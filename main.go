@@ -74,11 +74,14 @@ func main() {
 	logger.Info("connected to auth-service", zap.String("address", appCfg.AuthGRPC.Address))
 
 	// ── Dependency injection ──────────────────────────────────────────
-	paymentHandler, cleanup, err := wire.InitializeContainer(*cfgFile, logger)
+	container, cleanup, err := wire.InitializeContainer(*cfgFile, logger)
 	if err != nil {
 		logger.Fatal("failed to initialize container", zap.Error(err))
 	}
 	defer cleanup()
+
+	paymentHandler := container.PaymentHandler
+	webhookHandler := container.WebhookHandler
 
 	// ── gRPC server ───────────────────────────────────────────────────
 	grpcSrv := grpc.NewServer(
@@ -108,9 +111,13 @@ func main() {
 		logger.Fatal("gateway registration failed", zap.Error(err))
 	}
 
+	rootMux := http.NewServeMux()
+	rootMux.Handle("/api/v1/payments/webhook", webhookHandler)
+	rootMux.Handle("/", mux)
+
 	httpSrv := &http.Server{
 		Addr:    ":8081",
-		Handler: middleware.HTTPLogger(logger)(mux),
+		Handler: middleware.HTTPLogger(logger)(rootMux),
 	}
 
 	// ── Start gRPC ────────────────────────────────────────────────────
