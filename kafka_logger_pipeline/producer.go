@@ -100,5 +100,5 @@ type KafkaCoreCfg struct {
 
 // ZapField helper — attaches kafka fields to logger
 func Fields(logger *zap.Logger) *zap.Logger {
-	return logger.With(zap.String("service", "auth-service"))
+	return logger.With(zap.String("service", "payment-gateway"))
 }
