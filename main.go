@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"payment-gateway/config"
+	kafka "payment-gateway/kafka_logger_pipeline"
 	"payment-gateway/middleware"
 	paymentpb "payment-gateway/proto/paymentpb"
 	"payment-gateway/wire"
@@ -39,17 +40,24 @@ func main() {
 	consoleCfg := zap.NewDevelopmentConfig()
 	consoleCfg.EncoderConfig.CallerKey = "caller"
 	consoleCfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	logger, err := consoleCfg.Build(zap.AddCaller())
+	baseLogger, err := consoleCfg.Build(zap.AddCaller())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to build logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	defer baseLogger.Sync()
 
 	// ── Load config ───────────────────────────────────────────────────
 	appCfg, err := config.Load(*cfgFile)
 	if err != nil {
-		logger.Fatal("failed to load config", zap.Error(err))
+		baseLogger.Fatal("failed to load config", zap.Error(err))
+	}
+
+	// ── Build logger: console + kafka tee ────────────────────────────
+	logger, consumerCancel := buildLogger(appCfg, baseLogger)
+	defer consumerCancel()
+	if logger != baseLogger {
+		defer logger.Sync()
 	}
 
 	// ── Auth service gRPC client ──────────────────────────────────────
@@ -77,7 +85,7 @@ func main() {
 		grpc.ChainUnaryInterceptor(
 			middleware.UnaryRecovery(logger),
 			middleware.UnaryLogger(logger),
-			middleware.UnaryAuth(authClient, appCfg.AuthGRPC, logger), // validates JWT via auth-service gRPC
+			middleware.UnaryAuth(authClient, appCfg.AuthGRPC, logger),
 		),
 	)
 	paymentpb.RegisterPaymentServiceServer(grpcSrv, paymentHandler)
@@ -138,4 +146,54 @@ func main() {
 		logger.Error("http shutdown error", zap.Error(err))
 	}
 	logger.Info("payment-gateway stopped")
+}
+
+// buildLogger creates a tee logger: console + kafka (if enabled).
+// Returns the logger and a cancel func to stop the kafka consumer.
+func buildLogger(appCfg *config.Config, baseLogger *zap.Logger) (*zap.Logger, func()) {
+	if !appCfg.Kafka.Enabled {
+		baseLogger.Info("kafka logging disabled, using console only")
+		return baseLogger, func() {}
+	}
+
+	kafkaCore, err := kafka.NewKafkaCore(
+		appCfg.Kafka.Brokers,
+		appCfg.Kafka.Topic,
+		zapcore.InfoLevel,
+	)
+	if err != nil {
+		baseLogger.Error("kafka connection failed, using console only", zap.Error(err))
+		return baseLogger, func() {}
+	}
+
+	// Tee: console + kafka
+	logger := zap.New(
+		zapcore.NewTee(baseLogger.Core(), kafkaCore),
+		zap.AddCaller(),
+		zap.AddCallerSkip(0),
+	)
+
+	baseLogger.Info("kafka connected",
+		zap.Strings("brokers", appCfg.Kafka.Brokers),
+		zap.String("topic", appCfg.Kafka.Topic),
+		zap.String("log_dir", appCfg.Kafka.LogDir),
+	)
+
+	// Start consumer — reads from Kafka and writes to disk
+	consumer := kafka.NewLogConsumer(
+		appCfg.Kafka.Brokers,
+		appCfg.Kafka.Topic,
+		appCfg.Kafka.GroupID,
+		appCfg.Kafka.LogDir,
+		baseLogger,
+	)
+
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
+	go func() {
+		if err := consumer.Start(consumerCtx); err != nil {
+			baseLogger.Error("kafka consumer stopped", zap.Error(err))
+		}
+	}()
+
+	return logger, consumerCancel
 }
