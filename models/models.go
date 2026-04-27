@@ -85,3 +85,12 @@ type Refund struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
+
+type WebhookEvent struct {
+	ID        string `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	EventID   string `gorm:"uniqueIndex;not null"` // razorpay event id — prevents duplicate processing
+	Event     string `gorm:"not null"`             // payment.captured, payment.failed, refund.processed
+	Payload   string `gorm:"type:text;not null"`   // raw JSON body
+	Processed bool   `gorm:"default:false"`
+	CreatedAt time.Time
+}
