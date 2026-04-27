@@ -17,7 +17,7 @@ import (
 
 // Injectors from wire.go:
 
-func InitializeContainer(cfgFile string, logger *zap.Logger) (*handlers.PaymentHandler, func(), error) {
+func InitializeContainer(cfgFile string, logger *zap.Logger) (*Container, func(), error) {
 	configConfig, err := config.Load(cfgFile)
 	if err != nil {
 		return nil, nil, err
@@ -33,11 +33,23 @@ func InitializeContainer(cfgFile string, logger *zap.Logger) (*handlers.PaymentH
 	adapter := provideRazorpayAdapter(logger)
 	paymentService := services.NewPaymentService(orderRepository, paymentRepository, permissionRepository, providerRepository, adapter, logger)
 	paymentHandler := handlers.NewPaymentHandler(paymentService, logger)
-	return paymentHandler, func() {
+	webhookRepository := data.NewWebhookRepository(db)
+	webhookService := services.NewWebhookService(webhookRepository, orderRepository, paymentRepository, logger)
+	webhookHandler := handlers.NewWebhookHandler(webhookService, providerRepository, logger)
+	container := &Container{
+		PaymentHandler: paymentHandler,
+		WebhookHandler: webhookHandler,
+	}
+	return container, func() {
 	}, nil
 }
 
 // wire.go:
+
+type Container struct {
+	PaymentHandler *handlers.PaymentHandler
+	WebhookHandler *handlers.WebhookHandler
+}
 
 func provideRazorpayAdapter(logger *zap.Logger) razorpay.Adapter {
 	return razorpay.NewAdapter(logger)

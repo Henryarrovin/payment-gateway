@@ -13,13 +13,19 @@ import (
 	"go.uber.org/zap"
 )
 
-func InitializeContainer(cfgFile string, logger *zap.Logger) (*handlers.PaymentHandler, func(), error) {
+type Container struct {
+	PaymentHandler *handlers.PaymentHandler
+	WebhookHandler *handlers.WebhookHandler
+}
+
+func InitializeContainer(cfgFile string, logger *zap.Logger) (*Container, func(), error) {
 	wire.Build(
 		config.ProviderSet,
 		data.ProviderSet,
 		provideRazorpayAdapter,
 		services.ProviderSet,
 		handlers.ProviderSet,
+		wire.Struct(new(Container), "*"),
 	)
 	return nil, nil, nil
 }
