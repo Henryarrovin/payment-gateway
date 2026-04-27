@@ -2,4 +2,4 @@ package services
 
 import "github.com/google/wire"
 
-var ProviderSet = wire.NewSet(NewPaymentService)
+var ProviderSet = wire.NewSet(NewPaymentService, NewWebhookService)

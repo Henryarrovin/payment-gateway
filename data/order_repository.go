@@ -66,3 +66,15 @@ func (r *OrderRepository) UpdateProviderOrderID(ctx context.Context, id, provide
 	}
 	return nil
 }
+
+func (r *OrderRepository) FindByProviderOrderID(ctx context.Context, providerOrderID string) (*models.Order, error) {
+	var order models.Order
+	err := r.db.WithContext(ctx).
+		Preload("Provider").
+		Where("provider_order_id = ?", providerOrderID).
+		First(&order).Error
+	if err != nil {
+		return nil, fmt.Errorf("order not found by provider_order_id: %w", err)
+	}
+	return &order, nil
+}

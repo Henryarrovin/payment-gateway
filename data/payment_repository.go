@@ -82,3 +82,13 @@ func (r *PaymentRepository) CreateRefund(ctx context.Context, refund *models.Ref
 	}
 	return nil
 }
+
+func (r *PaymentRepository) UpdateRefundStatus(ctx context.Context, providerRefundID, status string) error {
+	if err := r.db.WithContext(ctx).
+		Model(&models.Refund{}).
+		Where("provider_refund_id = ?", providerRefundID).
+		Update("status", status).Error; err != nil {
+		return fmt.Errorf("update refund status: %w", err)
+	}
+	return nil
+}
