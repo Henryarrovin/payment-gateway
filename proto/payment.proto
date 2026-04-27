@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package payment.v1;
+
+import "google/api/annotations.proto";
+
+option go_package = "/";
+
+service PaymentService {
+  // CreateOrder — creates an order with the 3rd-party provider (Razorpay)
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/orders"
+      body: "*"
+    };
+  }
+
+  // CapturePayment — called after user completes payment on frontend
+  rpc CapturePayment (CapturePaymentRequest) returns (CapturePaymentResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/{order_id}/capture"
+      body: "*"
+    };
+  }
+
+  // GetOrder — fetch a single order
+  rpc GetOrder (GetOrderRequest) returns (GetOrderResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/orders/{order_id}"
+    };
+  }
+
+  // ListOrders — list all orders for the calling user
+  rpc ListOrders (ListOrdersRequest) returns (ListOrdersResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/orders"
+    };
+  }
+
+  // GetPayment — fetch payment details
+  rpc GetPayment (GetPaymentRequest) returns (GetPaymentResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/payments/{payment_id}"
+    };
+  }
+
+  // RefundPayment — admin-only refund
+  rpc RefundPayment (RefundPaymentRequest) returns (RefundPaymentResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/payments/{payment_id}/refund"
+      body: "*"
+    };
+  }
+}
+
+message CreateOrderRequest {
+  int64  amount   = 1; // in paise (e.g. 50000 = ₹500)
+  string currency = 2; // "INR"
+  string notes    = 3; // optional JSON metadata
+}
+
+message CreateOrderResponse {
+  string order_id          = 1; // internal UUID
+  string provider_order_id = 2; // Razorpay order_id
+  int64  amount            = 3;
+  string currency          = 4;
+  string status            = 5;
+  string key_id            = 6; // Razorpay key_id for frontend checkout
+}
+
+message CapturePaymentRequest {
+  string order_id            = 1;
+  string provider_payment_id = 2; // razorpay_payment_id from frontend
+  string provider_signature  = 3; // razorpay_signature from frontend
+  string method              = 4; // upi/card/netbanking
+}
+
+message CapturePaymentResponse {
+  string payment_id = 1;
+  string status     = 2;
+  string message    = 3;
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message GetOrderResponse {
+  string order_id          = 1;
+  string provider_order_id = 2;
+  int64  amount            = 3;
+  string currency          = 4;
+  string status            = 5;
+  string user_id           = 6;
+  string created_at        = 7;
+}
+
+message ListOrdersRequest {
+  // user_id is inferred from the JWT — no need to pass it
+}
+
+message ListOrdersResponse {
+  repeated GetOrderResponse orders = 1;
+}
+
+message GetPaymentRequest {
+  string payment_id = 1;
+}
+
+message GetPaymentResponse {
+  string payment_id          = 1;
+  string order_id            = 2;
+  string provider_payment_id = 3;
+  string method              = 4;
+  string status              = 5;
+  string failure_reason      = 6;
+  string captured_at         = 7;
+}
+
+message RefundPaymentRequest {
+  string payment_id = 1;
+  int64  amount     = 2; // 0 = full refund
+  string notes      = 3;
+}
+
+message RefundPaymentResponse {
+  string refund_id          = 1;
+  string provider_refund_id = 2;
+  string status             = 3;
+  string message            = 4;
+}
