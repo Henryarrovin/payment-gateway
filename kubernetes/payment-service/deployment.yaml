@@ -26,17 +26,6 @@ spec:
                 name: payment-config
             - secretRef:
                 name: payment-secrets
-          env:
-            - name: PAYMENT_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: payment-secrets
-                  key: PAYMENT_DB_PASSWORD
-            - name: PAYMENT_AUTH_GRPC_CANONICAL_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: payment-secrets
-                  key: PAYMENT_AUTH_GRPC_CANONICAL_SECRET
           volumeMounts:
             - name: logs
               mountPath: /apps/logs
