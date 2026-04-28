@@ -24,6 +24,7 @@ func NewDB(cfg *config.Config, logger *zap.Logger) (*gorm.DB, error) {
 		&models.Order{},
 		&models.Payment{},
 		&models.Refund{},
+		&models.WebhookEvent{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrating: %w", err)
 	}
