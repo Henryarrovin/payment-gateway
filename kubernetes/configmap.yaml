@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-config
+  namespace: auth
+data:
+  AUTH_SERVER_GRPC_PORT: "50051"
+  AUTH_SERVER_ENV: "production"
+  AUTH_DB_HOST: "postgres-service"
+  AUTH_DB_PORT: "5432"
+  AUTH_DB_USER: "postgres"
+  AUTH_DB_NAME: "s3demo"
+  AUTH_DB_SSLMODE: "disable"
+  AUTH_REDIS_ADDR: "redis-service:6379"
+  AUTH_REDIS_PASSWORD: ""
+  AUTH_REDIS_DB: "0"
+  AUTH_JWT_ACCESS_TTL: "15m"
+  AUTH_JWT_REFRESH_TTL: "168h"
+  AUTH_KAFKA_ENABLED: "true"
+  AUTH_KAFKA_BROKERS: "kafka-service:9092"
+  AUTH_KAFKA_TOPIC: "auth-service-logs"
+  AUTH_KAFKA_GROUP_ID: "auth-log-consumer"
+  AUTH_KAFKA_LOG_DIR: "/apps/logs"
