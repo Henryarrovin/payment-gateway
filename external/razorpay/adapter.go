@@ -1,17 +1,17 @@
-// Adapter interface for Razorpay's payment API.
-// The active provider config (URL, keys, mock flag) is fetched from the DB
 package razorpay
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"payment-gateway/models"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -53,127 +53,86 @@ type RefundOutput struct {
 	Status           string
 }
 
-// Adapter is the contract every provider implementation must satisfy.
+// Adapter interface
+
 type Adapter interface {
 	CreateOrder(ctx context.Context, provider *models.ThirdPartyProvider, in CreateOrderInput) (*CreateOrderOutput, error)
 	CapturePayment(ctx context.Context, provider *models.ThirdPartyProvider, in CaptureInput) (*CaptureOutput, error)
 	Refund(ctx context.Context, provider *models.ThirdPartyProvider, in RefundInput) (*RefundOutput, error)
 }
 
-//  Factory — returns mock or real adapter based on provider.IsMock
+// Factory
+// For local dev, DB provider row points base_url to http://localhost:8090/v1
+// For production, DB provider row points base_url to https://api.razorpay.com/v1
 
 func NewAdapter(logger *zap.Logger) Adapter {
-	// Factory always returns the router adapter which picks mock vs real at runtime.
-	return &routerAdapter{
-		mock: &MockAdapter{logger: logger},
-		real: &RealAdapter{logger: logger},
+	return &RealAdapter{
+		logger:     logger,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
-
-type routerAdapter struct {
-	mock Adapter
-	real Adapter
-}
-
-func (r *routerAdapter) CreateOrder(ctx context.Context, p *models.ThirdPartyProvider, in CreateOrderInput) (*CreateOrderOutput, error) {
-	if p.IsMock {
-		return r.mock.CreateOrder(ctx, p, in)
-	}
-	return r.real.CreateOrder(ctx, p, in)
-}
-
-func (r *routerAdapter) CapturePayment(ctx context.Context, p *models.ThirdPartyProvider, in CaptureInput) (*CaptureOutput, error) {
-	if p.IsMock {
-		return r.mock.CapturePayment(ctx, p, in)
-	}
-	return r.real.CapturePayment(ctx, p, in)
-}
-
-func (r *routerAdapter) Refund(ctx context.Context, p *models.ThirdPartyProvider, in RefundInput) (*RefundOutput, error) {
-	if p.IsMock {
-		return r.mock.Refund(ctx, p, in)
-	}
-	return r.real.Refund(ctx, p, in)
-}
-
-//  MockAdapter — simulates Razorpay responses locally
-
-type MockAdapter struct {
-	logger *zap.Logger
-}
-
-func (m *MockAdapter) CreateOrder(ctx context.Context, p *models.ThirdPartyProvider, in CreateOrderInput) (*CreateOrderOutput, error) {
-	m.logger.Info("mock.razorpay.CreateOrder",
-		zap.String("provider", p.Name),
-		zap.Int64("amount", in.Amount),
-		zap.String("currency", in.Currency),
-	)
-
-	// Simulate provider-side order ID (Razorpay format: order_<random>)
-	providerOrderID := fmt.Sprintf("order_mock_%s", uuid.New().String()[:8])
-
-	return &CreateOrderOutput{
-		ProviderOrderID: providerOrderID,
-		Amount:          in.Amount,
-		Currency:        in.Currency,
-		Status:          "created",
-	}, nil
-}
-
-func (m *MockAdapter) CapturePayment(ctx context.Context, p *models.ThirdPartyProvider, in CaptureInput) (*CaptureOutput, error) {
-	m.logger.Info("mock.razorpay.CapturePayment",
-		zap.String("provider", p.Name),
-		zap.String("provider_order_id", in.ProviderOrderID),
-		zap.String("provider_payment_id", in.ProviderPaymentID),
-	)
-
-	// In mock mode, skip real signature verification.
-	// In real mode (RealAdapter), we verify HMAC-SHA256.
-	_ = in.ProviderSignature
-
-	return &CaptureOutput{
-		ProviderPaymentID: in.ProviderPaymentID,
-		Method:            "mock_upi",
-		Status:            "captured",
-	}, nil
-}
-
-func (m *MockAdapter) Refund(ctx context.Context, p *models.ThirdPartyProvider, in RefundInput) (*RefundOutput, error) {
-	m.logger.Info("mock.razorpay.Refund",
-		zap.String("provider", p.Name),
-		zap.String("provider_payment_id", in.ProviderPaymentID),
-		zap.Int64("amount", in.Amount),
-	)
-
-	refundID := fmt.Sprintf("rfnd_mock_%s", uuid.New().String()[:8])
-
-	return &RefundOutput{
-		ProviderRefundID: refundID,
-		Status:           "processed",
-	}, nil
-}
-
-//  RealAdapter — actual Razorpay HTTP calls
-//  stubbed with the real Razorpay API contract
 
 type RealAdapter struct {
-	logger *zap.Logger
+	logger     *zap.Logger
+	httpClient *http.Client
 }
 
 func (r *RealAdapter) CreateOrder(ctx context.Context, p *models.ThirdPartyProvider, in CreateOrderInput) (*CreateOrderOutput, error) {
-	r.logger.Info("real.razorpay.CreateOrder — would POST to Razorpay API",
-		zap.String("base_url", p.BaseURL),
-		zap.Int64("amount", in.Amount),
+	body, _ := json.Marshal(map[string]interface{}{
+		"amount":   in.Amount,
+		"currency": in.Currency,
+		"receipt":  fmt.Sprintf("rcpt_%d", time.Now().UnixNano()),
+		"notes":    in.Notes,
+	})
+
+	req, err := http.NewRequestWithContext(ctx,
+		http.MethodPost,
+		p.BaseURL+"/orders",
+		bytes.NewBuffer(body),
 	)
-	// TODO: implement real HTTP call:
-	//   POST {p.BaseURL}/orders
-	//   Basic auth: p.KeyID : p.KeySecret
-	//   Body: {"amount": in.Amount, "currency": in.Currency, "receipt": uuid}
-	return nil, fmt.Errorf("real Razorpay adapter not yet configured — set IsMock=true in DB for development")
+	if err != nil {
+		return nil, fmt.Errorf("create order request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(p.KeyID, p.KeySecret)
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("create order call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("create order: unexpected status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		ID       string `json:"id"`
+		Amount   int64  `json:"amount"`
+		Currency string `json:"currency"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode create order response: %w", err)
+	}
+
+	r.logger.Info("razorpay.create_order",
+		zap.String("provider_order_id", result.ID),
+		zap.String("base_url", p.BaseURL),
+		zap.Int64("amount", result.Amount),
+	)
+
+	return &CreateOrderOutput{
+		ProviderOrderID: result.ID,
+		Amount:          result.Amount,
+		Currency:        result.Currency,
+		Status:          result.Status,
+	}, nil
 }
 
 func (r *RealAdapter) CapturePayment(ctx context.Context, p *models.ThirdPartyProvider, in CaptureInput) (*CaptureOutput, error) {
-	// Verify Razorpay signature: HMAC-SHA256(order_id + "|" + payment_id, key_secret)
+	// Verify HMAC-SHA256 signature from frontend/mock
+	// Razorpay signs: order_id|payment_id with key_secret
 	mac := hmac.New(sha256.New, []byte(p.KeySecret))
 	mac.Write([]byte(fmt.Sprintf("%s|%s", in.ProviderOrderID, in.ProviderPaymentID)))
 	expected := hex.EncodeToString(mac.Sum(nil))
@@ -182,19 +141,97 @@ func (r *RealAdapter) CapturePayment(ctx context.Context, p *models.ThirdPartyPr
 		return nil, fmt.Errorf("razorpay signature verification failed")
 	}
 
-	// TODO: optionally call Razorpay capture API for manual capture orders.
+	// Call provider capture endpoint
+	body, _ := json.Marshal(map[string]interface{}{
+		"amount":   in.Amount,
+		"order_id": in.ProviderOrderID, // sent so mock can reference it in webhook
+	})
+
+	req, err := http.NewRequestWithContext(ctx,
+		http.MethodPost,
+		fmt.Sprintf("%s/payments/%s/capture", p.BaseURL, in.ProviderPaymentID),
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("capture request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(p.KeyID, p.KeySecret)
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("capture call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("capture: unexpected status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		ID     string `json:"id"`
+		Method string `json:"method"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode capture response: %w", err)
+	}
+
+	r.logger.Info("razorpay.capture_payment",
+		zap.String("provider_payment_id", result.ID),
+		zap.String("method", result.Method),
+		zap.String("status", result.Status),
+	)
+
 	return &CaptureOutput{
-		ProviderPaymentID: in.ProviderPaymentID,
-		Method:            "unknown",
-		Status:            "captured",
+		ProviderPaymentID: result.ID,
+		Method:            result.Method,
+		Status:            result.Status,
 	}, nil
 }
 
 func (r *RealAdapter) Refund(ctx context.Context, p *models.ThirdPartyProvider, in RefundInput) (*RefundOutput, error) {
-	// TODO: POST {p.BaseURL}/payments/{in.ProviderPaymentID}/refund
-	return nil, fmt.Errorf("real Razorpay adapter not yet configured")
-}
+	body, _ := json.Marshal(map[string]interface{}{
+		"amount": in.Amount,
+		"notes":  in.Notes,
+	})
 
-func MockTime() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	req, err := http.NewRequestWithContext(ctx,
+		http.MethodPost,
+		fmt.Sprintf("%s/payments/%s/refund", p.BaseURL, in.ProviderPaymentID),
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("refund request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(p.KeyID, p.KeySecret)
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("refund call: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("refund: unexpected status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode refund response: %w", err)
+	}
+
+	r.logger.Info("razorpay.refund",
+		zap.String("provider_refund_id", result.ID),
+		zap.String("status", result.Status),
+	)
+
+	return &RefundOutput{
+		ProviderRefundID: result.ID,
+		Status:           result.Status,
+	}, nil
 }
