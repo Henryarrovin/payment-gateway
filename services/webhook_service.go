@@ -75,6 +75,7 @@ func (s *WebhookService) Process(ctx context.Context, eventID, event string, raw
 
 	processed, err := s.webhooks.IsProcessed(ctx, eventID)
 	if err != nil {
+		log.Error("webhook.idempotency_check_failed", zap.String("event_id", eventID), zap.Error(err))
 		return fmt.Errorf("idempotency check failed: %w", err)
 	}
 	if processed {
@@ -89,30 +90,32 @@ func (s *WebhookService) Process(ctx context.Context, eventID, event string, raw
 		Processed: false,
 	}
 	if err := s.webhooks.Save(ctx, webhookEvent); err != nil {
+		log.Error("webhook.save_failed", zap.String("event_id", eventID), zap.Error(err))
 		return fmt.Errorf("saving webhook event: %w", err)
 	}
 
 	var payload RazorpayWebhookPayload
 	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		log.Error("webhook.parse_payload_failed", zap.String("event_id", eventID), zap.Error(err))
 		return fmt.Errorf("parsing webhook payload: %w", err)
 	}
 
 	switch event {
 	case "payment.captured":
 		if err := s.handlePaymentCaptured(ctx, payload); err != nil {
-			log.Error("webhook.payment_captured.failed", zap.Error(err))
+			log.Error("webhook.payment_captured.failed", zap.String("event_id", eventID), zap.Error(err))
 			return err
 		}
 
 	case "payment.failed":
 		if err := s.handlePaymentFailed(ctx, payload); err != nil {
-			log.Error("webhook.payment_failed.failed", zap.Error(err))
+			log.Error("webhook.payment_failed.failed", zap.String("event_id", eventID), zap.Error(err))
 			return err
 		}
 
 	case "refund.processed":
 		if err := s.handleRefundProcessed(ctx, payload); err != nil {
-			log.Error("webhook.refund_processed.failed", zap.Error(err))
+			log.Error("webhook.refund_processed.failed", zap.String("event_id", eventID), zap.Error(err))
 			return err
 		}
 
@@ -121,6 +124,7 @@ func (s *WebhookService) Process(ctx context.Context, eventID, event string, raw
 	}
 
 	if err := s.webhooks.MarkProcessed(ctx, eventID); err != nil {
+		log.Error("webhook.mark_processed_failed", zap.String("event_id", eventID), zap.Error(err))
 		return fmt.Errorf("marking processed: %w", err)
 	}
 
@@ -132,31 +136,37 @@ func (s *WebhookService) Process(ctx context.Context, eventID, event string, raw
 }
 
 func (s *WebhookService) handlePaymentCaptured(ctx context.Context, payload RazorpayWebhookPayload) error {
+	log := s.logger
 	if payload.Payload.Payment == nil {
+		log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("missing payment entity in payload")))
 		return fmt.Errorf("missing payment entity in payload")
 	}
 
 	p := payload.Payload.Payment.Entity
-	s.logger.Info("webhook.payment_captured",
+	log.Info("webhook.payment_captured",
 		zap.String("provider_payment_id", p.ID),
 		zap.String("provider_order_id", p.OrderID),
 	)
 
 	order, err := s.orders.FindByProviderOrderID(ctx, p.OrderID)
 	if err != nil {
+		log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("order not found for provider_order_id %s: %w", p.OrderID, err)))
 		return fmt.Errorf("order not found for provider_order_id %s: %w", p.OrderID, err)
 	}
 
 	payment, err := s.payments.FindByOrderID(ctx, order.ID)
 	if err != nil {
+		log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("payment not found for order %s: %w", order.ID, err)))
 		return fmt.Errorf("payment not found for order %s: %w", order.ID, err)
 	}
 
 	if payment.Status == models.OrderStatusPending {
 		if err := s.payments.Capture(ctx, payment.ID, p.ID, p.Method); err != nil {
+			log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to capture payment: %w", err)))
 			return fmt.Errorf("capturing payment: %w", err)
 		}
 		if err := s.orders.UpdateStatus(ctx, order.ID, models.OrderStatusPaid); err != nil {
+			log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to update order status: %w", err)))
 			return fmt.Errorf("updating order status: %w", err)
 		}
 	}
@@ -164,31 +174,37 @@ func (s *WebhookService) handlePaymentCaptured(ctx context.Context, payload Razo
 }
 
 func (s *WebhookService) handlePaymentFailed(ctx context.Context, payload RazorpayWebhookPayload) error {
+	log := s.logger
 	if payload.Payload.Payment == nil {
+		log.Error("webhook.payment_failed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("missing payment entity in payload")))
 		return fmt.Errorf("missing payment entity in payload")
 	}
 
 	p := payload.Payload.Payment.Entity
-	s.logger.Info("webhook.payment_failed",
+	log.Info("webhook.payment_failed",
 		zap.String("provider_payment_id", p.ID),
 		zap.String("provider_order_id", p.OrderID),
 	)
 
 	order, err := s.orders.FindByProviderOrderID(ctx, p.OrderID)
 	if err != nil {
-		return fmt.Errorf("order not found: %w", err)
+		log.Error("webhook.payment_failed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("order not found for provider_order_id %s: %w", p.OrderID, err)))
+		return fmt.Errorf("order not found for provider_order_id %s: %w", p.OrderID, err)
 	}
 
 	payment, err := s.payments.FindByOrderID(ctx, order.ID)
 	if err != nil {
-		return fmt.Errorf("payment not found: %w", err)
+		log.Error("webhook.payment_failed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("payment not found for order %s: %w", order.ID, err)))
+		return fmt.Errorf("payment not found for order %s: %w", order.ID, err)
 	}
 
 	if payment.Status == models.OrderStatusPending {
 		if err := s.payments.Fail(ctx, payment.ID, "payment failed via webhook"); err != nil {
+			log.Error("webhook.payment_failed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to fail payment: %w", err)))
 			return fmt.Errorf("failing payment: %w", err)
 		}
 		if err := s.orders.UpdateStatus(ctx, order.ID, models.OrderStatusFailed); err != nil {
+			log.Error("webhook.payment_failed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to update order status: %w", err)))
 			return fmt.Errorf("updating order status: %w", err)
 		}
 	}
@@ -196,17 +212,20 @@ func (s *WebhookService) handlePaymentFailed(ctx context.Context, payload Razorp
 }
 
 func (s *WebhookService) handleRefundProcessed(ctx context.Context, payload RazorpayWebhookPayload) error {
+	log := s.logger
 	if payload.Payload.Refund == nil {
+		log.Error("webhook.refund_processed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("missing refund entity in payload")))
 		return fmt.Errorf("missing refund entity in payload")
 	}
 
 	ref := payload.Payload.Refund.Entity
-	s.logger.Info("webhook.refund_processed",
+	log.Info("webhook.refund_processed",
 		zap.String("provider_refund_id", ref.ID),
 		zap.String("provider_payment_id", ref.PaymentID),
 	)
 
 	if err := s.payments.UpdateRefundStatus(ctx, ref.ID, ref.Status); err != nil {
+		log.Error("webhook.refund_processed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to update refund status: %w", err)))
 		return fmt.Errorf("updating refund status: %w", err)
 	}
 	return nil
