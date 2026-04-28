@@ -8,27 +8,37 @@ echo "Creating secrets..."
 # Generate .env.secrets if it doesn't exist
 if [ ! -f /workspace/.env.secrets ]; then
     echo "▶ .env.secrets not found, generating..."
+
+    # Generate shared canonical secret — must be same for both services
+    CANONICAL_SECRET=$(openssl rand -hex 32)
+
     cat > /workspace/.env.secrets << EOF
 AUTH_DB_PASSWORD=postgres
+PAYMENT_DB_PASSWORD=postgres
 AUTH_JWT_ACCESS_SECRET=$(openssl rand -hex 32)
 AUTH_JWT_REFRESH_SECRET=$(openssl rand -hex 32)
-AUTH_JWT_CANONICAL_SECRET=$(openssl rand -hex 32)
+AUTH_JWT_CANONICAL_SECRET=${CANONICAL_SECRET}
+PAYMENT_AUTH_GRPC_CANONICAL_SECRET=${CANONICAL_SECRET}
 EOF
     echo "Secrets generated"
 fi
 
-# Verify secrets file has content
 echo "Secrets file contents:"
 cat /workspace/.env.secrets
 
-# Create secret directly from file — no envsubst needed
 kubectl create secret generic auth-secrets \
+  --namespace auth \
+  --from-env-file=/workspace/.env.secrets \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create secret generic payment-secrets \
   --namespace auth \
   --from-env-file=/workspace/.env.secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Secret created"
 kubectl get secret auth-secrets -n auth
+kubectl get secret payment-secrets -n auth
 
 echo "Creating configmap..."
 kubectl apply -f configmap.yaml
@@ -66,9 +76,31 @@ kubectl wait --namespace auth \
   --selector=app=kafka \
   --timeout=90s
 
+# Create payment_db if it doesn't exist
+echo "Creating payment_db database..."
+kubectl exec -n auth deployment/postgres -- \
+  psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='payment_db'" | \
+  grep -q 1 || \
+  kubectl exec -n auth deployment/postgres -- \
+  psql -U postgres -c "CREATE DATABASE payment_db;"
+
+# Create auth_db if it doesn't exist
+echo "Creating auth_db database..."
+kubectl exec -n auth deployment/postgres -- \
+  psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='auth_db'" | \
+  grep -q 1 || \
+  kubectl exec -n auth deployment/postgres -- \
+  psql -U postgres -c "CREATE DATABASE auth_db;"
+
 echo "Deploying auth-service..."
 kubectl apply -f auth-service/deployment.yaml
 kubectl apply -f auth-service/service.yaml
+kubectl apply -f auth-service/ingress.yaml
+
+echo "Deploying payment-gateway..."
+kubectl apply -f payment-service/deployment.yaml
+kubectl apply -f payment-service/service.yaml
+kubectl apply -f payment-service/ingress.yaml
 
 echo "Done!"
 kubectl get all -n auth
