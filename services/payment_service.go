@@ -158,21 +158,36 @@ func (s *PaymentService) CapturePayment(ctx context.Context, claims *middleware.
 	log := middleware.FromContext(ctx, s.logger)
 
 	if err := s.authorize(ctx, "CapturePayment", claims); err != nil {
+		log.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+			zap.String("endpoint", "CapturePayment"),
+		)
 		return nil, err
 	}
 
 	order, err := s.orders.FindByID(ctx, in.OrderID)
 	if err != nil {
+		log.Error("payment_service.order_not_found",
+			zap.String("order_id", in.OrderID),
+		)
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
 	if !isAdmin(claims.Roles) && order.UserID != claims.UserID {
+		log.Warn("payment_service.order_access_denied",
+			zap.String("user_id", claims.UserID),
+			zap.String("order_id", order.ID),
+		)
 		return nil, ErrForbidden
 	}
 
 	provider := &order.Provider
 	payment, err := s.payments.FindByOrderID(ctx, order.ID)
 	if err != nil {
+		log.Error("payment_service.payment_not_found",
+			zap.String("order_id", order.ID),
+		)
 		return nil, fmt.Errorf("payment record not found: %w", err)
 	}
 
@@ -189,15 +204,28 @@ func (s *PaymentService) CapturePayment(ctx context.Context, claims *middleware.
 		KeySecret:         provider.KeySecret,
 	})
 	if err != nil {
+		log.Error("payment_service.capture_failed",
+			zap.String("order_id", order.ID),
+			zap.String("provider_payment_id", in.ProviderPaymentID),
+			zap.Error(err),
+		)
 		_ = s.payments.Fail(ctx, payment.ID, err.Error())
 		_ = s.orders.UpdateStatus(ctx, order.ID, models.OrderStatusFailed)
 		return nil, fmt.Errorf("capture failed: %w", err)
 	}
 
 	if err := s.payments.Capture(ctx, payment.ID, result.ProviderPaymentID, result.Method); err != nil {
+		log.Error("payment_service.update_payment_failed",
+			zap.String("payment_id", payment.ID),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("updating payment: %w", err)
 	}
 	if err := s.orders.UpdateStatus(ctx, order.ID, models.OrderStatusPaid); err != nil {
+		log.Error("payment_service.update_order_failed",
+			zap.String("order_id", order.ID),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("updating order: %w", err)
 	}
 
