@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: henryarrovin/auth-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 50051
+              name: grpc
+          envFrom:
+            - configMapRef:
+                name: auth-config
+          env:
+            - name: AUTH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secrets
+                  key: AUTH_DB_PASSWORD
+            - name: AUTH_JWT_ACCESS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secrets
+                  key: AUTH_JWT_ACCESS_SECRET
+            - name: AUTH_JWT_REFRESH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secrets
+                  key: AUTH_JWT_REFRESH_SECRET
+            - name: AUTH_JWT_CANONICAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secrets
+                  key: AUTH_JWT_CANONICAL_SECRET
+          volumeMounts:
+            - name: logs-storage
+              mountPath: /apps/logs
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: logs-storage
+          persistentVolumeClaim:
+            claimName: logs-pvc
