@@ -36,6 +36,7 @@ type AuthClaims struct {
 }
 
 type authClaimsKey struct{}
+type correlationIDKey struct{}
 
 // InjectClaims stores validated claims into the context.
 func InjectClaims(ctx context.Context, claims *AuthClaims) context.Context {
@@ -48,15 +49,21 @@ func ClaimsFromContext(ctx context.Context) (*AuthClaims, bool) {
 	return c, ok
 }
 
+func injectCorrelationID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, correlationIDKey{}, id)
+}
+
+func correlationIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(correlationIDKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
 type bodyLogWriter struct {
 	http.ResponseWriter
 	body       *bytes.Buffer
 	statusCode int
-}
-
-func (w *bodyLogWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
-	return w.ResponseWriter.Write(b)
 }
 
 func (w *bodyLogWriter) WriteHeader(code int) {
@@ -94,8 +101,9 @@ func HTTPLogger(logger *zap.Logger) func(http.Handler) http.Handler {
 				zap.String("path", r.URL.Path),
 				zap.String("remote_addr", r.RemoteAddr),
 			)
+
 			ctx := InjectLogger(r.Context(), enriched)
-			ctx = context.WithValue(ctx, CorrelationIDKey, correlationID)
+			ctx = injectCorrelationID(ctx, correlationID)
 			r = r.WithContext(ctx)
 
 			enriched.Info("http request")
@@ -138,7 +146,7 @@ func UnaryLogger(logger *zap.Logger) grpc.UnaryServerInterceptor {
 			zap.String("method", info.FullMethod),
 		)
 		ctx = InjectLogger(ctx, enriched)
-		ctx = context.WithValue(ctx, CorrelationIDKey, correlationID)
+		ctx = injectCorrelationID(ctx, correlationID)
 
 		enriched.Info("grpc request", zap.Any("request", req))
 
@@ -170,12 +178,22 @@ func UnaryAuth(authClient authpb.AuthServiceClient, cfg config.AuthGRPCConfig, l
 			return nil, status.Error(codes.Unauthenticated, "missing or invalid Authorization header")
 		}
 
+		correlationID := correlationIDFromContext(ctx)
+		if correlationID == "" {
+			correlationID = uuid.NewString()
+		}
+
 		date := canonical.Now()
 		parts := strings.Split(info.FullMethod, "/")
 		methodName := parts[len(parts)-1]
 		sig := canonical.Sign("POST", "/api/v1/auth/validate", date, cfg.ServiceName, cfg.CanonicalSecret)
 
-		validateCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		outgoingMD := metadata.Pairs(
+			CorrelationIDKey, correlationID,
+			"authorization", "Bearer "+token,
+		)
+		validateCtx := metadata.NewOutgoingContext(ctx, outgoingMD)
+		validateCtx, cancel := context.WithTimeout(validateCtx, cfg.Timeout)
 		defer cancel()
 
 		resp, err := authClient.ValidateToken(validateCtx, &authpb.ValidateTokenRequest{
@@ -210,6 +228,7 @@ func UnaryAuth(authClient authpb.AuthServiceClient, cfg config.AuthGRPCConfig, l
 			zap.String("user_id", claims.UserID),
 			zap.Strings("roles", claims.Roles),
 			zap.String("method", methodName),
+			zap.String("correlation_id", correlationID),
 		)
 
 		return handler(ctx, req)
@@ -222,7 +241,6 @@ func extractBearerToken(ctx context.Context) (string, error) {
 		return "", status.Error(codes.Unauthenticated, "no metadata")
 	}
 
-	// gRPC-gateway forwards the HTTP Authorization header as "authorization"
 	vals := md.Get("authorization")
 	if len(vals) == 0 {
 		return "", status.Error(codes.Unauthenticated, "no authorization header")
