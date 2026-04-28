@@ -85,12 +85,13 @@ func seedPermissions(db *gorm.DB, logger *zap.Logger) {
 func seedProviders(db *gorm.DB, logger *zap.Logger) {
 	providers := []models.ThirdPartyProvider{
 		{
-			Name:      "razorpay",
-			BaseURL:   "https://api.razorpay.com/v1",
-			KeyID:     "rzp_test_mock_key_id",
-			KeySecret: "rzp_test_mock_key_secret",
-			IsActive:  true,
-			IsMock:    true,
+			Name:          "razorpay",
+			BaseURL:       "http://localhost:8090/v1",
+			KeyID:         "rzp_test_mock_key_id",
+			KeySecret:     "rzp_test_mock_key_secret",
+			WebhookSecret: "rzp_webhook_mock_secret",
+			IsActive:      true,
+			IsMock:        false,
 		},
 	}
 
