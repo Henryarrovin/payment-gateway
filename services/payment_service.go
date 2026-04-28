@@ -81,11 +81,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, claims *middleware.Aut
 	log := middleware.FromContext(ctx, s.logger)
 
 	if err := s.authorize(ctx, "CreateOrder", claims); err != nil {
+		log.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+		)
 		return nil, err
 	}
 
 	provider, err := s.providers.GetActiveProvider(ctx)
 	if err != nil {
+		log.Error("payment_service.fetch_provider_failed", zap.Error(err))
 		return nil, fmt.Errorf("fetching provider: %w", err)
 	}
 
@@ -102,6 +107,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, claims *middleware.Aut
 		Notes:    in.Notes,
 	})
 	if err != nil {
+		log.Error("payment_service.create_order_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Int64("amount", in.Amount),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("provider.create_order: %w", err)
 	}
 
@@ -115,6 +125,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, claims *middleware.Aut
 		Notes:           in.Notes,
 	}
 	if err := s.orders.Create(ctx, order); err != nil {
+		log.Error("payment_service.create_order_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Int64("amount", in.Amount),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("persisting order: %w", err)
 	}
 
@@ -123,6 +138,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, claims *middleware.Aut
 		Status:  models.OrderStatusPending,
 	}
 	if err := s.payments.Create(ctx, payment); err != nil {
+		log.Error("payment_service.create_payment_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Int64("amount", in.Amount),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("persisting payment: %w", err)
 	}
 
@@ -243,15 +263,26 @@ func (s *PaymentService) CapturePayment(ctx context.Context, claims *middleware.
 
 func (s *PaymentService) GetOrder(ctx context.Context, claims *middleware.AuthClaims, orderID string) (*models.Order, error) {
 	if err := s.authorize(ctx, "GetOrder", claims); err != nil {
+		s.logger.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+		)
 		return nil, err
 	}
 
 	order, err := s.orders.FindByID(ctx, orderID)
 	if err != nil {
+		s.logger.Error("payment_service.order_not_found",
+			zap.String("order_id", orderID),
+		)
 		return nil, err
 	}
 
 	if !isAdmin(claims.Roles) && order.UserID != claims.UserID {
+		s.logger.Warn("payment_service.order_access_denied",
+			zap.String("user_id", claims.UserID),
+			zap.String("order_id", order.ID),
+		)
 		return nil, ErrForbidden
 	}
 	return order, nil
@@ -259,22 +290,46 @@ func (s *PaymentService) GetOrder(ctx context.Context, claims *middleware.AuthCl
 
 func (s *PaymentService) ListOrders(ctx context.Context, claims *middleware.AuthClaims) ([]models.Order, error) {
 	if err := s.authorize(ctx, "ListOrders", claims); err != nil {
+		s.logger.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+		)
 		return nil, err
 	}
-	return s.orders.ListByUserID(ctx, claims.UserID)
+
+	orders, err := s.orders.ListByUserID(ctx, claims.UserID)
+	if err != nil {
+		s.logger.Error("payment_service.list_orders_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to list orders: %w", err)
+	}
+	return orders, nil
 }
 
 func (s *PaymentService) GetPayment(ctx context.Context, claims *middleware.AuthClaims, paymentID string) (*models.Payment, error) {
 	if err := s.authorize(ctx, "GetPayment", claims); err != nil {
+		s.logger.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+		)
 		return nil, err
 	}
 
 	payment, err := s.payments.FindByID(ctx, paymentID)
 	if err != nil {
+		s.logger.Error("payment_service.payment_not_found",
+			zap.String("payment_id", paymentID),
+		)
 		return nil, err
 	}
 
 	if !isAdmin(claims.Roles) && payment.Order.UserID != claims.UserID {
+		s.logger.Warn("payment_service.payment_access_denied",
+			zap.String("user_id", claims.UserID),
+			zap.String("payment_id", payment.ID),
+		)
 		return nil, ErrForbidden
 	}
 	return payment, nil
@@ -297,20 +352,34 @@ func (s *PaymentService) RefundPayment(ctx context.Context, claims *middleware.A
 	log := middleware.FromContext(ctx, s.logger)
 
 	if err := s.authorize(ctx, "RefundPayment", claims); err != nil {
+		log.Error("payment_service.authorization_failed",
+			zap.String("user_id", claims.UserID),
+			zap.Strings("roles", claims.Roles),
+		)
 		return nil, err
 	}
 
 	payment, err := s.payments.FindByID(ctx, in.PaymentID)
 	if err != nil {
+		log.Error("payment_service.payment_not_found",
+			zap.String("payment_id", in.PaymentID),
+		)
 		return nil, fmt.Errorf("payment not found: %w", err)
 	}
 
 	if payment.Status != models.OrderStatusPaid {
+		log.Error("payment_service.refund_invalid_status",
+			zap.String("payment_id", payment.ID),
+			zap.String("status", string(payment.Status)),
+		)
 		return nil, fmt.Errorf("payment is not in captured state")
 	}
 
 	order, err := s.orders.FindByID(ctx, payment.OrderID)
 	if err != nil {
+		log.Error("payment_service.order_not_found",
+			zap.String("order_id", payment.OrderID),
+		)
 		return nil, fmt.Errorf("order not found: %w", err)
 	}
 
@@ -332,6 +401,11 @@ func (s *PaymentService) RefundPayment(ctx context.Context, claims *middleware.A
 		Notes:             in.Notes,
 	})
 	if err != nil {
+		log.Error("payment_service.refund_failed",
+			zap.String("payment_id", payment.ID),
+			zap.Int64("amount", refundAmount),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("refund failed: %w", err)
 	}
 
@@ -343,10 +417,19 @@ func (s *PaymentService) RefundPayment(ctx context.Context, claims *middleware.A
 		Notes:            in.Notes,
 	}
 	if err := s.payments.CreateRefund(ctx, refund); err != nil {
+		log.Error("payment_service.create_refund_failed",
+			zap.String("payment_id", payment.ID),
+			zap.Int64("amount", refundAmount),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("persisting refund: %w", err)
 	}
 
 	if err := s.orders.UpdateStatus(ctx, order.ID, models.OrderStatusRefunded); err != nil {
+		log.Error("payment_service.update_order_failed",
+			zap.String("order_id", order.ID),
+			zap.Error(err),
+		)
 		return nil, fmt.Errorf("updating order status: %w", err)
 	}
 
