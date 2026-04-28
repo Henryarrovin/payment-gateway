@@ -15,7 +15,7 @@ COPY . .
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
-    -o auth-service \
+    -o payment-gateway \
     ./main.go
 
 # Run stage
