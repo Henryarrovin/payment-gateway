@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -79,7 +80,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Process async so Razorpay gets 200 immediately
 	// Razorpay retries if it doesn't get 200 within 5s
 	go func() {
-		if err := h.svc.Process(r.Context(), eventID, eventBody.Event, rawBody); err != nil {
+		bgCtx := context.Background()
+		if err := h.svc.Process(bgCtx, eventID, eventBody.Event, rawBody); err != nil {
 			h.logger.Error("webhook.process_failed",
 				zap.String("event_id", eventID),
 				zap.String("event", eventBody.Event),
