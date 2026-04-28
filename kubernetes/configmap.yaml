@@ -21,3 +21,30 @@ data:
   AUTH_KAFKA_TOPIC: "auth-service-logs"
   AUTH_KAFKA_GROUP_ID: "auth-log-consumer"
   AUTH_KAFKA_LOG_DIR: "/apps/logs"
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-config
+  namespace: auth
+data:
+  PAYMENT_SERVER_GRPC_PORT: "50052"
+  PAYMENT_SERVER_ENV: "production"
+
+  PAYMENT_DB_HOST: "postgres-service"
+  PAYMENT_DB_PORT: "5432"
+  PAYMENT_DB_USER: "postgres"
+  PAYMENT_DB_NAME: "s3demo"
+  PAYMENT_DB_SSLMODE: "disable"
+
+  PAYMENT_AUTH_GRPC_ADDRESS: "auth-service:50051"
+  PAYMENT_AUTH_GRPC_SERVICE_NAME: "payment-gateway"
+  PAYMENT_AUTH_GRPC_TIMEOUT: "5s"
+
+  PAYMENT_KAFKA_ENABLED: "true"
+  PAYMENT_KAFKA_BROKERS: "kafka-service:9092"
+  PAYMENT_KAFKA_TOPIC: "payment-gateway-logs"
+  PAYMENT_KAFKA_GROUP_ID: "payment-log-consumer"
+  PAYMENT_KAFKA_LOG_DIR: "/apps/logs"
