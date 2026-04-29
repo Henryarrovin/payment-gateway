@@ -9,27 +9,46 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// webhookTarget is where the mock fires webhooks automatically
-const webhookTarget = "http://localhost:8081/api/v1/payments/webhook"
+var (
+	webhookTarget string
+	webhookSecret string
+	listenAddr    string
+)
 
-// webhookSecret must match the webhook_secret in the DB provider row
-const webhookSecret = "rzp_webhook_mock_secret"
+func init() {
+	webhookTarget = getEnv("MOCK_WEBHOOK_TARGET", "http://localhost:8081/api/v1/payments/webhook")
+	webhookSecret = getEnv("MOCK_WEBHOOK_SECRET", "rzp_webhook_mock_secret")
+	listenAddr = getEnv("MOCK_LISTEN_ADDR", ":8090")
+}
+
+func getEnv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	return fallback
+}
 
 func main() {
+	log.Printf("mock-razorpay starting")
+	log.Printf("  listen_addr    = %s", listenAddr)
+	log.Printf("  webhook_target = %s", webhookTarget)
+	log.Printf("  webhook_secret = %s", webhookSecret)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/v1/orders", handleCreateOrder)
 	mux.HandleFunc("/v1/payments/", handlePayments)
 	mux.HandleFunc("/v1/sign", handleSign)
 
-	log.Println("mock-razorpay listening on :8090")
-	if err := http.ListenAndServe(":8090", loggingMiddleware(mux)); err != nil {
+	log.Printf("mock-razorpay listening on %s", listenAddr)
+	if err := http.ListenAndServe(listenAddr, loggingMiddleware(mux)); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -52,7 +71,7 @@ func basicAuth(r *http.Request) bool {
 	return ok
 }
 
-// ── ORDER ────────────────────────────────────────────────────────────────────
+// ── ORDER ─────────────────────────────────────────────────────────────────────
 
 func handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -81,11 +100,9 @@ func handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		"status":     "created",
 		"created_at": time.Now().Unix(),
 	})
-
-	// No webhook on order creation — Razorpay only webhooks on payment events
 }
 
-// ── PAYMENTS ─────────────────────────────────────────────────────────────────
+// ── PAYMENTS ──────────────────────────────────────────────────────────────────
 
 func handlePayments(w http.ResponseWriter, r *http.Request) {
 	if !basicAuth(r) {
@@ -113,7 +130,7 @@ func handlePayments(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ── CAPTURE ──────────────────────────────────────────────────────────────────
+// ── CAPTURE ───────────────────────────────────────────────────────────────────
 
 func handleCapture(w http.ResponseWriter, r *http.Request, paymentID string) {
 	if r.Method != http.MethodPost {
@@ -123,11 +140,10 @@ func handleCapture(w http.ResponseWriter, r *http.Request, paymentID string) {
 
 	var req struct {
 		Amount  int64  `json:"amount"`
-		OrderID string `json:"order_id"` // payment-gateway sends this so we can webhook back
+		OrderID string `json:"order_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	// Send capture response to payment-gateway
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":       paymentID,
 		"amount":   req.Amount,
@@ -136,15 +152,13 @@ func handleCapture(w http.ResponseWriter, r *http.Request, paymentID string) {
 		"captured": true,
 	})
 
-	// Automatically fire payment.captured webhook after a short delay
-	// Delay mimics Razorpay's async webhook delivery (usually 1-3s after capture)
 	go func() {
 		time.Sleep(2 * time.Second)
 		fireWebhook("payment.captured", req.OrderID, paymentID, "", req.Amount)
 	}()
 }
 
-// ── REFUND ───────────────────────────────────────────────────────────────────
+// ── REFUND ────────────────────────────────────────────────────────────────────
 
 func handleRefund(w http.ResponseWriter, r *http.Request, paymentID string) {
 	if r.Method != http.MethodPost {
@@ -160,7 +174,6 @@ func handleRefund(w http.ResponseWriter, r *http.Request, paymentID string) {
 
 	refundID := fmt.Sprintf("rfnd_%s", uuid.New().String()[:14])
 
-	// Send refund response to payment-gateway
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":         refundID,
 		"payment_id": paymentID,
@@ -168,14 +181,13 @@ func handleRefund(w http.ResponseWriter, r *http.Request, paymentID string) {
 		"status":     "processed",
 	})
 
-	// Automatically fire refund.processed webhook after a short delay
 	go func() {
 		time.Sleep(2 * time.Second)
 		fireWebhook("refund.processed", "", paymentID, refundID, req.Amount)
 	}()
 }
 
-// ── SIGNATURE HELPER ─────────────────────────────────────────────────────────
+// ── SIGNATURE HELPER ──────────────────────────────────────────────────────────
 
 func handleSign(w http.ResponseWriter, r *http.Request) {
 	orderID := r.URL.Query().Get("order_id")
@@ -190,7 +202,7 @@ func handleSign(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ── WEBHOOK FIRE ─────────────────────────────────────────────────────────────
+// ── WEBHOOK FIRE ──────────────────────────────────────────────────────────────
 
 // fireWebhook builds and sends a Razorpay-shaped webhook to the payment-gateway.
 // Called automatically after capture and refund — no manual trigger needed.
@@ -242,7 +254,6 @@ func fireWebhook(event, orderID, paymentID, refundID string, amount int64) {
 
 	rawBody, _ := json.Marshal(payload)
 
-	// Sign with webhook secret
 	mac := hmac.New(sha256.New, []byte(webhookSecret))
 	mac.Write(rawBody)
 	sig := hex.EncodeToString(mac.Sum(nil))
@@ -264,5 +275,5 @@ func fireWebhook(event, orderID, paymentID, refundID string, amount int64) {
 	}
 	defer resp.Body.Close()
 
-	log.Printf("[mock-razorpay] webhook fired event=%s status=%d", event, resp.StatusCode)
+	log.Printf("[mock-razorpay] webhook fired event=%s target=%s status=%d", event, webhookTarget, resp.StatusCode)
 }
