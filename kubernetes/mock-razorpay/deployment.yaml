@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-razorpay
+  namespace: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-razorpay
+  template:
+    metadata:
+      labels:
+        app: mock-razorpay
+    spec:
+      containers:
+        - name: mock-razorpay
+          image: henryarrovin/mock-razorpay:latest
+          ports:
+            - containerPort: 8090
+          env:
+            - name: MOCK_WEBHOOK_TARGET
+              value: "http://payment-gateway-service:8081/api/v1/payments/webhook"
+            - name: MOCK_WEBHOOK_SECRET
+              value: "rzp_webhook_mock_secret"
+            - name: MOCK_LISTEN_ADDR
+              value: ":8090"
