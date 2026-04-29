@@ -87,7 +87,7 @@ func seedProviders(db *gorm.DB, logger *zap.Logger) {
 	providers := []models.ThirdPartyProvider{
 		{
 			Name:          "razorpay",
-			BaseURL:       "http://localhost:8090/v1",
+			BaseURL:       "http://mock-razorpay-service:8090/v1",
 			KeyID:         "rzp_test_mock_key_id",
 			KeySecret:     "rzp_test_mock_key_secret",
 			WebhookSecret: "rzp_webhook_mock_secret",
