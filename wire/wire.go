@@ -7,6 +7,7 @@ import (
 	"payment-gateway/data"
 	"payment-gateway/external/razorpay"
 	"payment-gateway/handlers"
+	kafka "payment-gateway/kafka_logger_pipeline"
 	"payment-gateway/services"
 
 	"github.com/google/wire"
@@ -22,6 +23,7 @@ func InitializeContainer(cfgFile string, logger *zap.Logger) (*Container, func()
 	wire.Build(
 		config.ProviderSet,
 		data.ProviderSet,
+		kafka.ProviderSet,
 		provideRazorpayAdapter,
 		services.ProviderSet,
 		handlers.ProviderSet,
