@@ -47,11 +47,12 @@ type AuthGRPCConfig struct {
 }
 
 type KafkaConfig struct {
-	Brokers []string `mapstructure:"brokers"`
-	Topic   string   `mapstructure:"topic"`
-	GroupID string   `mapstructure:"group_id"`
-	LogDir  string   `mapstructure:"log_dir"`
-	Enabled bool     `mapstructure:"enabled"`
+	Brokers            []string `mapstructure:"brokers"`
+	Topic              string   `mapstructure:"topic"`
+	GroupID            string   `mapstructure:"group_id"`
+	LogDir             string   `mapstructure:"log_dir"`
+	Enabled            bool     `mapstructure:"enabled"`
+	PaymentEventsTopic string   `mapstructure:"payment_events_topic"`
 }
 
 func Load(cfgFile string) (*Config, error) {
@@ -71,6 +72,7 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetDefault("kafka.group_id", "payment-log-consumer")
 	v.SetDefault("kafka.log_dir", "./logs")
 	v.SetDefault("kafka.brokers", []string{"localhost:9092"})
+	v.SetDefault("kafka.payment_events_topic", "payment-events")
 
 	if cfgFile != "" {
 		v.SetConfigFile(cfgFile)
@@ -150,6 +152,9 @@ func Load(cfgFile string) (*Config, error) {
 	}
 	if val := os.Getenv("PAYMENT_KAFKA_LOG_DIR"); val != "" {
 		cfg.Kafka.LogDir = val
+	}
+	if val := os.Getenv("PAYMENT_KAFKA_PAYMENT_EVENTS_TOPIC"); val != "" {
+		cfg.Kafka.PaymentEventsTopic = val
 	}
 
 	return &cfg, nil
