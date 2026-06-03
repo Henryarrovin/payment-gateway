@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"payment-gateway/data"
+	"payment-gateway/kafka_logger_pipeline"
 	"payment-gateway/models"
 
 	"go.uber.org/zap"
@@ -40,10 +41,11 @@ type RazorpayWebhookPayload struct {
 }
 
 type WebhookService struct {
-	webhooks *data.WebhookRepository
-	orders   *data.OrderRepository
-	payments *data.PaymentRepository
-	logger   *zap.Logger
+	webhooks      *data.WebhookRepository
+	orders        *data.OrderRepository
+	payments      *data.PaymentRepository
+	logger        *zap.Logger
+	eventProducer *kafka_logger_pipeline.PaymentEventProducer
 }
 
 func NewWebhookService(
@@ -51,12 +53,14 @@ func NewWebhookService(
 	orders *data.OrderRepository,
 	payments *data.PaymentRepository,
 	logger *zap.Logger,
+	eventProducer *kafka_logger_pipeline.PaymentEventProducer,
 ) *WebhookService {
 	return &WebhookService{
-		webhooks: webhooks,
-		orders:   orders,
-		payments: payments,
-		logger:   logger,
+		webhooks:      webhooks,
+		orders:        orders,
+		payments:      payments,
+		logger:        logger,
+		eventProducer: eventProducer,
 	}
 }
 
@@ -169,6 +173,11 @@ func (s *WebhookService) handlePaymentCaptured(ctx context.Context, payload Razo
 			log.Error("webhook.payment_captured.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to update order status: %w", err)))
 			return fmt.Errorf("updating order status: %w", err)
 		}
+
+		if err := s.eventProducer.PublishPaymentCaptured(p.ID, p.OrderID, order.UserID, p.Amount); err != nil {
+			// non-fatal — DB is already updated
+			log.Error("webhook.payment_captured.kafka_publish_failed", zap.Error(err))
+		}
 	}
 	return nil
 }
@@ -228,5 +237,15 @@ func (s *WebhookService) handleRefundProcessed(ctx context.Context, payload Razo
 		log.Error("webhook.refund_processed.failed", zap.String("event_id", payload.Entity), zap.Error(fmt.Errorf("failed to update refund status: %w", err)))
 		return fmt.Errorf("updating refund status: %w", err)
 	}
+
+	pmt, err := s.payments.FindByProviderPaymentID(ctx, ref.PaymentID)
+	if err != nil {
+		log.Error("webhook.refund_processed.payment_lookup_failed", zap.Error(err))
+	} else {
+		if err := s.eventProducer.PublishRefundProcessed(ref.ID, ref.PaymentID, pmt.Order.UserID, ref.Amount); err != nil {
+			log.Error("webhook.refund_processed.kafka_publish_failed", zap.Error(err))
+		}
+	}
+
 	return nil
 }
