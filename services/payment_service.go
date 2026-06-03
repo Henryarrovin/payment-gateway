@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"payment-gateway/data"
 	"payment-gateway/external/razorpay"
+	"payment-gateway/kafka_logger_pipeline"
 	"payment-gateway/middleware"
 	"payment-gateway/models"
 
@@ -12,12 +13,13 @@ import (
 )
 
 type PaymentService struct {
-	orders      *data.OrderRepository
-	payments    *data.PaymentRepository
-	permissions *data.PermissionRepository
-	providers   *data.ProviderRepository
-	adapter     razorpay.Adapter
-	logger      *zap.Logger
+	orders        *data.OrderRepository
+	payments      *data.PaymentRepository
+	permissions   *data.PermissionRepository
+	providers     *data.ProviderRepository
+	adapter       razorpay.Adapter
+	logger        *zap.Logger
+	eventProducer *kafka_logger_pipeline.PaymentEventProducer
 }
 
 func NewPaymentService(
@@ -27,14 +29,16 @@ func NewPaymentService(
 	providers *data.ProviderRepository,
 	adapter razorpay.Adapter,
 	logger *zap.Logger,
+	eventProducer *kafka_logger_pipeline.PaymentEventProducer,
 ) *PaymentService {
 	return &PaymentService{
-		orders:      orders,
-		payments:    payments,
-		permissions: permissions,
-		providers:   providers,
-		adapter:     adapter,
-		logger:      logger,
+		orders:        orders,
+		payments:      payments,
+		permissions:   permissions,
+		providers:     providers,
+		adapter:       adapter,
+		logger:        logger,
+		eventProducer: eventProducer,
 	}
 }
 
@@ -253,6 +257,13 @@ func (s *PaymentService) CapturePayment(ctx context.Context, claims *middleware.
 		zap.String("payment_id", payment.ID),
 		zap.String("provider_payment_id", result.ProviderPaymentID),
 	)
+
+	if err := s.eventProducer.PublishPaymentCaptured(
+		result.ProviderPaymentID, order.ProviderOrderID, order.UserID, order.Amount,
+	); err != nil {
+		// non-fatal — payment is already captured in DB
+		log.Error("payment_service.kafka_publish_failed", zap.Error(err))
+	}
 
 	return &CaptureOutput{
 		PaymentID: payment.ID,

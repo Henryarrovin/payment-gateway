@@ -92,3 +92,15 @@ func (r *PaymentRepository) UpdateRefundStatus(ctx context.Context, providerRefu
 	}
 	return nil
 }
+
+func (r *PaymentRepository) FindByProviderPaymentID(ctx context.Context, providerPaymentID string) (*models.Payment, error) {
+	var payment models.Payment
+	err := r.db.WithContext(ctx).
+		Preload("Order").
+		Where("provider_payment_id = ?", providerPaymentID).
+		First(&payment).Error
+	if err != nil {
+		return nil, fmt.Errorf("payment not found for provider payment id: %w", err)
+	}
+	return &payment, nil
+}

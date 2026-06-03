@@ -12,6 +12,7 @@ import (
 	"payment-gateway/data"
 	"payment-gateway/external/razorpay"
 	"payment-gateway/handlers"
+	"payment-gateway/kafka_logger_pipeline"
 	"payment-gateway/services"
 )
 
@@ -31,16 +32,22 @@ func InitializeContainer(cfgFile string, logger *zap.Logger) (*Container, func()
 	permissionRepository := data.NewPermissionRepository(db)
 	providerRepository := data.NewProviderRepository(db)
 	adapter := provideRazorpayAdapter(logger)
-	paymentService := services.NewPaymentService(orderRepository, paymentRepository, permissionRepository, providerRepository, adapter, logger)
+	kafkaConfig := config.ProvideKafkaConfig(configConfig)
+	paymentEventProducer, cleanup, err := kafka_logger_pipeline.NewPaymentEventProducerProvider(kafkaConfig, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	paymentService := services.NewPaymentService(orderRepository, paymentRepository, permissionRepository, providerRepository, adapter, logger, paymentEventProducer)
 	paymentHandler := handlers.NewPaymentHandler(paymentService, logger)
 	webhookRepository := data.NewWebhookRepository(db)
-	webhookService := services.NewWebhookService(webhookRepository, orderRepository, paymentRepository, logger)
+	webhookService := services.NewWebhookService(webhookRepository, orderRepository, paymentRepository, logger, paymentEventProducer)
 	webhookHandler := handlers.NewWebhookHandler(webhookService, providerRepository, logger)
 	container := &Container{
 		PaymentHandler: paymentHandler,
 		WebhookHandler: webhookHandler,
 	}
 	return container, func() {
+		cleanup()
 	}, nil
 }
 
